@@ -87,7 +87,7 @@ class UniformDataset(Dataset):
         data_index = np.random.randint(self.datasetnum[set_index], size=1)[0]
         return self._transform(set_key, data_index)
 
-
+# '/data/clip/ClipReady/01_Multi-Atlas_Labeling/label/label0068.nii.gz'
 class UniformCacheDataset(CacheDataset):
     def __init__(self, data, transform, cache_rate, datasetkey):
         super().__init__(data=data, transform=transform, cache_rate=cache_rate)

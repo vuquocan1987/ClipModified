@@ -1,0 +1,40 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": "${command:pickArgs}"
+        },
+        {
+            "name": "Python: Train with Distributed Data Parallel",
+            "type": "debugpy",
+            "request": "launch",
+            "python": "${command:python.interpreterPath}",
+            "module": "torch.distributed.launch",
+            "args": [
+                "--nproc_per_node=2",
+                "--master_port=1234",
+                "train.py",
+                "--dist", "True",
+                "--data_root_path", "/data/clip/ClipReady/",
+                "--num_workers", "10",
+                "--num_samples", "4",
+                "--cache_dataset",
+                "--cache_rate", "0.6",
+                "--uniform_sample"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0,1"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}
