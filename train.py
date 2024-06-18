@@ -220,8 +220,8 @@ def process(args):
         scheduler.step()
         
         args.phase = 'train'
-        # loss_dice, loss_bce = train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE)
-        loss_dice, loss_bce = 0, 0
+        loss_dice, loss_bce = train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE)
+        # loss_dice, loss_bce = 0, 0
         if rank == 0:
             writer.add_scalar('train_dice_loss', loss_dice, args.epoch)
             writer.add_scalar('train_bce_loss', loss_bce, args.epoch)

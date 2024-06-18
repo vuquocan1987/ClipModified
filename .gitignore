@@ -6,3 +6,8 @@ clip/
 universal/
 # ignore pycache in all directories
 __pycache__/
+dataset/__pycache__/dataloader.cpython-38.pyc
+__pycache__/
+dataset/__pycache__/dataloader.cpython-38.pyc
+optimizers/__pycache__/lr_scheduler.cpython-38.pyc
+pretrained_weights/swinunetr.pth.1
