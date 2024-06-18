@@ -1,6 +1,6 @@
 from monai.transforms import (
     AsDiscrete,
-    AddChanneld,
+    EnsureChannelFirstD,
     Compose,
     CropForegroundd,
     LoadImaged,
@@ -177,34 +177,34 @@ class LoadImageh5d(MapTransform):
         return d
 
 class RandZoomd_select(RandZoomd):
-    def __call__(self, data):
+    def __call__(self, data, **kwargs):
         d = dict(data)
         name = d['name']
         key = get_key(name)
         if (key not in ['10_03', '10_06', '10_07', '10_08', '10_09', '10_10']):
             return d
-        d = super().__call__(d)
+        d = super().__call__(d,**kwargs)
         return d
 
 
 class RandCropByPosNegLabeld_select(RandCropByPosNegLabeld):
-    def __call__(self, data):
+    def __call__(self, data,**kwargs):
         d = dict(data)
         name = d['name']
         key = get_key(name)
         if key in ['10_03', '10_07', '10_08', '04']:
             return d
-        d = super().__call__(d)
+        d = super().__call__(d,**kwargs)
         return d
 
 class RandCropByLabelClassesd_select(RandCropByLabelClassesd):
-    def __call__(self, data):
+    def __call__(self, data,**kwargs):
         d = dict(data)
         name = d['name']
         key = get_key(name)
         if key not in ['10_03', '10_07', '10_08', '04']:
             return d
-        d = super().__call__(d)
+        d = super().__call__(d,**kwargs)
         return d
 
 class Compose_Select(Compose):
@@ -227,7 +227,7 @@ def get_loader(args):
     train_transforms = Compose(
         [
             LoadImageh5d(keys=["image", "label"]), #0
-            AddChanneld(keys=["image", "label"]),
+            EnsureChannelFirstD(keys=["image", "label"]),
             Orientationd(keys=["image", "label"], axcodes="RAS"),
             Spacingd(
                 keys=["image", "label"],
@@ -282,7 +282,7 @@ def get_loader(args):
     val_transforms = Compose(
         [
             LoadImageh5d(keys=["image", "label"]),
-            AddChanneld(keys=["image", "label"]),
+            EnsureChannelFirstD(keys=["image", "label"]),
             Orientationd(keys=["image", "label"], axcodes="RAS"),
             # ToTemplatelabeld(keys=['label']),
             # RL_Splitd(keys=['label']),
@@ -373,11 +373,13 @@ def get_loader(args):
     
     
     if args.phase == 'validation':
+        if args.batch_size != 1:
+            raise ValueError('batch size should be 1 for validation')
         if args.cache_dataset:
             val_dataset = CacheDataset(data=data_dicts_val, transform=val_transforms, cache_rate=args.cache_rate)
         else:
             val_dataset = Dataset(data=data_dicts_val, transform=val_transforms)
-        val_loader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=4, collate_fn=list_data_collate)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=list_data_collate)
         return val_loader, val_transforms
     
     
@@ -386,7 +388,7 @@ def get_loader(args):
             test_dataset = CacheDataset(data=data_dicts_test, transform=val_transforms, cache_rate=args.cache_rate)
         else:
             test_dataset = Dataset(data=data_dicts_test, transform=val_transforms)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4, collate_fn=list_data_collate)
+        test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, collate_fn=list_data_collate)
         return test_loader, val_transforms
 
 
@@ -394,7 +396,7 @@ def get_loader_without_gt(args):
     val_transforms = Compose(
         [
             LoadImaged(keys=["image"]),
-            AddChanneld(keys=["image"]),
+            EnsureChannelFirstD(keys=["image"]),
             Orientationd(keys=["image"], axcodes="RAS"),
             # ToTemplatelabeld(keys=['label']),
             # RL_Splitd(keys=['label']),

@@ -15,9 +15,10 @@ from model.Unetpp import BasicUNetPlusPlus
 
 
 class Universal_model(nn.Module):
-    def __init__(self, img_size, in_channels, out_channels, backbone = 'swinunetr', encoding = 'rand_embedding'):
+    def __init__(self, img_size, in_channels, out_channels, backbone = 'swinunetr', encoding = 'rand_embedding', do_supervision=False):
         # encoding: rand_embedding or word_embedding
         super().__init__()
+        self.do_supervision = do_supervision
         self.backbone_name = backbone
         if backbone == 'swinunetr':
             self.backbone = SwinUNETR(img_size=img_size,
@@ -120,6 +121,7 @@ class Universal_model(nn.Module):
             self.register_buffer('organ_embedding', torch.randn(out_channels, 512))
             self.text_to_vision = nn.Linear(512, 256)
         self.class_num = out_channels
+        self.deep_supervision = nn.Conv3d(8*self.class_num, self.class_num, kernel_size=1, stride=1, padding=0,groups=self.class_num)
 
     def load_params(self, model_dict):
         if self.backbone_name == 'swinunetr':
@@ -171,10 +173,12 @@ class Universal_model(nn.Module):
 
         return weight_splits, bias_splits
 
-    def heads_forward(self, features, weights, biases, num_insts):
+    def heads_forward(self, features, weights, biases, num_insts, get_itermediate_results=False):
         assert features.dim() == 5
         n_layers = len(weights)
         x = features
+        if get_itermediate_results:
+            xs = [x.detach().clone().cpu()]
         for i, (w, b) in enumerate(zip(weights, biases)):
             # print(i, x.shape, w.shape)
             x = F.conv3d(
@@ -184,9 +188,15 @@ class Universal_model(nn.Module):
             )
             if i < n_layers - 1:
                 x = F.relu(x)
+            if get_itermediate_results and i == 1:
+                xs.append(x.detach().clone().to('cpu'))
+        if get_itermediate_results:
+            _, _, D, H, W = x.size()
+            xs = [x.reshape(32,-1,D,H,W) for x in xs]
+            return x, xs
         return x
 
-    def forward(self, x_in):
+    def forward(self, x_in, get_intermediate_result=False):
         dec4, out = self.backbone(x_in)
 
         if self.encoding == 'rand_embedding':
@@ -197,7 +207,8 @@ class Universal_model(nn.Module):
         # task_encoding torch.Size([31, 256, 1, 1, 1])
         x_feat = self.GAP(dec4)
         b = x_feat.shape[0]
-        logits_array = []
+        logits_array, super_vision_array = [], []
+        list_xs, list_weights, list_biases = [], [], []
         for i in range(b):
             x_cond = torch.cat([x_feat[i].unsqueeze(0).repeat(self.class_num,1,1,1,1), task_encoding], 1)
             params = self.controller(x_cond)
@@ -205,14 +216,30 @@ class Universal_model(nn.Module):
             
             head_inputs = self.precls_conv(out[i].unsqueeze(0))
             head_inputs = head_inputs.repeat(self.class_num,1,1,1,1)
+            
             N, _, D, H, W = head_inputs.size()
             head_inputs = head_inputs.reshape(1, -1, D, H, W)
+            if self.do_supervision:
+                out2_arrays = self.deep_supervision(head_inputs)
+                out2_arrays.reshape(1, -1, D, H, W)
+                super_vision_array.append(out2_arrays)
             # print(head_inputs.shape, params.shape)
             weights, biases = self.parse_dynamic_params(params, 8, self.weight_nums, self.bias_nums)
-
-            logits = self.heads_forward(head_inputs, weights, biases, N)
+            list_weights.append(weights)
+            list_biases.append(biases)
+            if get_intermediate_result:
+                logits, xs = self.heads_forward(head_inputs, weights, biases, N, get_intermediate_result)
+                list_xs.append(xs)
+            else:
+                logits = self.heads_forward(head_inputs, weights, biases, N)
             logits_array.append(logits.reshape(1, -1, D, H, W))
         
         out = torch.cat(logits_array,dim=0)
+        
         # print(out.shape)
+        if get_intermediate_result:
+            return out, x_feat.detach().clone().to('cpu'), list_xs, list_weights, list_biases
+        if self.do_supervision and self.training:
+            out2 = torch.cat(super_vision_array, dim=0)
+            return out, out2
         return out

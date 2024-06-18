@@ -8,6 +8,13 @@ from matplotlib import pyplot as plt
 from torch import Tensor, einsum
 
 
+class Individual_image_loss(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+    def forward(self, predict, target):
+        loss = F.binary_cross_entropy_with_logits(predict, target)
+        return loss
+
 class BinaryDiceLoss(nn.Module):
     def __init__(self, smooth=1, p=2, reduction='mean'):
         super(BinaryDiceLoss, self).__init__()
@@ -20,15 +27,17 @@ class BinaryDiceLoss(nn.Module):
         predict = predict.contiguous().view(-1)
         target = target.contiguous().view(-1)
 
-        num = torch.sum(torch.mul(predict, target), dim=1)
-        den = torch.sum(predict, dim=1) + torch.sum(target, dim=1) + self.smooth
-
+        # num = torch.sum(torch.mul(predict, target), dim=1)
+        # den = torch.sum(predict, dim=1) + torch.sum(target, dim=1) + self.smooth
+        num = torch.sum(torch.mul(predict, target))
+        den = torch.sum(predict) + torch.sum(target) + self.smooth
         dice_score = 2*num / den
         dice_loss = 1 - dice_score
 
-        dice_loss_avg = dice_loss[target[:,0]!=-1].sum() / dice_loss[target[:,0]!=-1].shape[0]
+        dice_score = 2. * num / den
+        dice_loss = 1 - dice_score
 
-        return dice_loss_avg
+        return dice_loss
 
 class DiceLoss(nn.Module):
     def __init__(self, weight=None, ignore_index=None, num_classes=3, **kwargs):

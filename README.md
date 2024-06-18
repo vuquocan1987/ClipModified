@@ -117,7 +117,13 @@ cd ../
 ## 1. Training
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python -W ignore -m torch.distributed.launch --nproc_per_node=2 --master_port=1234 train.py --dist True --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.6 --uniform_sample
+CUDA_VISIBLE_DEVICES=0 python -W ignore -m torch.distributed.launch --nproc_per_node=1 --master_port=1234 train.py --dist True --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.3 --uniform_sample --dataset_list PAOT_TEMP --datasetkey 01 04 05 07 08 09 10_03 10_06 10_07 10_08 10_09 10_10
+CUDA_VISIBLE_DEVICES=0 python -W ignore -m torch.distributed.launch --nproc_per_node=1 --master_port=1234 train.py --dist True --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.2 --uniform_sample --dataset_list PAOT_TEMP --datasetkey 01 04 05 07 08 09 10_03 10_06 10_07 10_08 10_09 10_10 --swap_word_embedding 2
+
+CUDA_VISIBLE_DEVICES=0 python -W ignore -m torch.distributed.launch --nproc_per_node=1 --master_port=1234 train.py --dist True --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.2 --uniform_sample --dataset_list PAOT_TEMP --datasetkey 01 04 05 07 08 09 10_03 10_06 10_07 10_08 10_09 10_10 --swap_word_embedding 2 --store_num 2
+
+CUDA_VISIBLE_DEVICES=0 python -W ignore -m torch.distributed.launch --nproc_per_node=1 --master_port=1234 train.py --dist False --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.01 --uniform_sample --dataset_list PAOT_TEMP --datasetkey 01 04 05 07 08 09 10_03 10_06 10_07 10_08 10_09 10_10 --store_num 2 --do_supervision 0.2
+load word embedding
 ```
 
 ## 2. Validation

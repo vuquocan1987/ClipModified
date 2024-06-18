@@ -24,12 +24,18 @@ from monai.metrics import DiceMetric
 from model.Universal_model import Universal_model
 from dataset.dataloader import get_loader
 from utils import loss
-from utils.utils import dice_score, check_data, TEMPLATE, get_key, NUM_CLASS
+from utils.utils import dice_score, check_data, TEMPLATE, get_key, NUM_CLASS, ORGAN_NAME
 from optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 
 
 torch.multiprocessing.set_sharing_strategy('file_system')
 
+
+
+def wrap_around(tensor, shift):
+    n = tensor.shape[0]
+    idx = [(i + shift) % n for i in range(n)]
+    return tensor[idx]
 
 def train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE):
     model.train()
@@ -40,11 +46,20 @@ def train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE):
     )
     for step, batch in enumerate(epoch_iterator):
         x, y, name = batch["image"].to(args.device), batch["post_label"].float().to(args.device), batch['name']
-        logit_map = model(x)
-
+        # use almost compare
+        if args.do_supervision > 0.0:
+            logit_map, out = model(x)
+            term_vision_loss = loss_seg_CE.forward(out, y, name, TEMPLATE)
+            # average of cross entropy loss across all images / organs
+        else:
+            logit_map = model(x)
+            term_vision_loss = 0
+        
         term_seg_Dice = loss_seg_DICE.forward(logit_map, y, name, TEMPLATE)
         term_seg_BCE = loss_seg_CE.forward(logit_map, y, name, TEMPLATE)
-        loss = term_seg_BCE + term_seg_Dice
+        
+        loss = term_seg_BCE + term_seg_Dice + term_vision_loss
+        
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -78,12 +93,13 @@ def validation(model, ValLoader, args):
             organ_list = TEMPLATE[template_key]
             for organ in organ_list:
                 dice_organ = dice_score(pred_sigmoid[b,organ-1,:,:,:], label[b,organ-1,:,:,:].cuda())
-                dice_list[template_key][0][organ-1] += dice_organ.item()
+                dice_list[template_key][0][organ-1] += dice_organ[0]
                 dice_list[template_key][1][organ-1] += 1
     
     ave_organ_dice = np.zeros((2, NUM_CLASS))
+    result_path = get_result_path(args)
     if args.local_rank == 0:
-        with open('out/'+args.log_name+f'/val_{args.epoch}.txt', 'w') as f:
+        with open(os.path.join(result_path,f'/val_{args.epoch}.txt'), 'w') as f:
             for key in TEMPLATE.keys():
                 organ_list = TEMPLATE[key]
                 content = 'Task%s| '%(key)
@@ -98,14 +114,29 @@ def validation(model, ValLoader, args):
             content = 'Average | '
             for i in range(NUM_CLASS):
                 content += '%s: %.4f, '%(ORGAN_NAME[i], ave_organ_dice[0][organ-1] / ave_organ_dice[1][organ-1])
+            # get the average dice and print 
+            print(f"average dice: {ave_organ_dice[0].sum() / ave_organ_dice[1].sum()}")
             print(content)
             f.write(content)
             f.write('\n')
             
             
+def get_latest_model_checkpoint(args):
+    # list all the files in the path get file with latest epoch
+    result_path = get_result_path(args)
+    files = os.listdir(result_path)
+    files.sort()
+    # get the epoch from name of file
+    latest_file = files[-1]
+    epoch = int(latest_file.split('_')[-1].split('.')[0])
+    return os.path.join(result_path, latest_file), epoch
 
-
+def get_result_path(args):
+    result_path = os.path.join(args.result_path, args.log_name, "do_supervision" if args.do_supervision  else "no_supervision",str(args.swap_word_embedding))
+    os.makedirs(result_path, exist_ok=True)
+    return result_path
 def process(args):
+    result_path = get_result_path(args)
     rank = 0
 
     if args.dist:
@@ -119,15 +150,18 @@ def process(args):
                     in_channels=1,
                     out_channels=NUM_CLASS,
                     backbone=args.backbone,
-                    encoding=args.trans_encoding
+                    encoding=args.trans_encoding,
+                    do_supervision=args.do_supervision
                     )
-
+    
     #Load pre-trained weights
     if args.pretrain is not None:
         model.load_params(torch.load(args.pretrain)["state_dict"])
 
     if args.trans_encoding == 'word_embedding':
         word_embedding = torch.load(args.word_embedding)
+        if args.swap_word_embedding != -1:
+            word_embedding = wrap_around(word_embedding, args.swap_word_embedding)
         model.organ_embedding.data = word_embedding.float()
         print('load word embedding')
 
@@ -148,8 +182,12 @@ def process(args):
 
     scheduler = LinearWarmupCosineAnnealingLR(optimizer, warmup_epochs=args.warmup_epoch, max_epochs=args.max_epoch)
 
-    if args.resume:
-        checkpoint = torch.load(args.resume)
+    if args.resume or args.load_latest:
+        if args.resume:
+            checkpoint = torch.load(args.resume)
+        else:
+            args.resume, args.epoch = get_latest_model_checkpoint(args)
+            checkpoint = torch.load(args.resume)
         if args.dist:
             model.load_state_dict(checkpoint['net'])
         else:
@@ -167,18 +205,23 @@ def process(args):
     torch.backends.cudnn.benchmark = True
 
     train_loader, train_sampler = get_loader(args)
-
+    args.phase = 'validation'
+    val_loader, val_transforms = get_loader(args)
+    args.phase = 'train'
     if rank == 0:
         writer = SummaryWriter(log_dir='out/' + args.log_name)
         print('Writing Tensorboard logs to ', 'out/' + args.log_name)
-
+    
     while args.epoch < args.max_epoch:
+        
         if args.dist:
             dist.barrier()
             train_sampler.set_epoch(args.epoch)
         scheduler.step()
-
-        loss_dice, loss_bce = train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE)
+        
+        args.phase = 'train'
+        # loss_dice, loss_bce = train(args, train_loader, model, optimizer, loss_seg_DICE, loss_seg_CE)
+        loss_dice, loss_bce = 0, 0
         if rank == 0:
             writer.add_scalar('train_dice_loss', loss_dice, args.epoch)
             writer.add_scalar('train_bce_loss', loss_bce, args.epoch)
@@ -189,15 +232,20 @@ def process(args):
                 "net": model.state_dict(),
                 'optimizer':optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),
-                "epoch": args.epoch
+                "epoch": args.epoch,
+                'loss_dice': loss_dice,
+                'loss_bce': loss_bce
             }
-            if not os.path.isdir('out/' + args.log_name):
-                os.mkdir('out/' + args.log_name)
-            torch.save(checkpoint, 'out/' + args.log_name + '/epoch_' + str(args.epoch) + '.pth')
+            # do validate here
+            args.phase = 'validation'
+            validation(model, val_loader, args)
+            
+            
+            torch.save(checkpoint, os.path.join(result_path, f'epoch_{args.epoch:04d}.pth'))
             print('save model success')
 
         args.epoch += 1
-
+    
     dist.destroy_process_group()
 
 def main():
@@ -217,6 +265,7 @@ def main():
                         help='The path of pretrain model. Eg, ./pretrained_weights/swin_unetr.base_5000ep_f48_lr2e-4_pretrained.pt')
     parser.add_argument('--trans_encoding', default='word_embedding', 
                         help='the type of encoding: rand_embedding or word_embedding')
+    parser.add_argument('--swap_word_embedding', default=-1, type=int, help='swap the word embedding')
     parser.add_argument('--word_embedding', default='./pretrained_weights/txt_encoding.pth', 
                         help='The path of word embedding')
     ## hyperparameter
@@ -256,6 +305,9 @@ def main():
                                             help='the content for ')
     parser.add_argument('--cache_dataset', action="store_true", default=False, help='whether use cache dataset')
     parser.add_argument('--cache_rate', default=0.005, type=float, help='The percentage of cached data in total')
+    parser.add_argument('--result_path', default='/data/clip/result', help='The path of result')
+    parser.add_argument('--do_supervision', type = float,default=0.0, help='whether use supervision')
+    parser.add_argument('--load_latest', action="store_true", default=False,  help='if we want to load the latest model and continue training')
 
     args = parser.parse_args()
     
@@ -265,3 +317,6 @@ if __name__ == "__main__":
     main()
 
 # python -m torch.distributed.launch --nproc_per_node=2 --master_port=1234 train.py --dist True --uniform_sample
+
+
+# CUDA_VISIBLE_DEVICES=1 python -W ignore -m torch.distributed.launch --nproc_per_node=1 --master_port=1234 train.py --dist False --data_root_path /data/clip/ClipReady/ --num_workers 10 --num_samples 4 --cache_dataset --cache_rate 0.01 --uniform_sample --dataset_list PAOT_TEMP --datasetkey 01 04 05 07 08 09 10_03 10_06 10_07 10_08 10_09 10_10 --store_num 2 --do_supervision 0.2
